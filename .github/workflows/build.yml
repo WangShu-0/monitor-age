@@ -31,7 +31,7 @@ jobs:
             --hidden-import dateutil `
             --hidden-import pystray `
             --hidden-import PIL `
-            age_monitor.py
+            monitor_age.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
