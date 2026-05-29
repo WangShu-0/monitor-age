@@ -5,14 +5,6 @@ from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
-import threading
-
-try:
-    import pystray
-    from PIL import Image, ImageDraw
-    TRAY_AVAILABLE = True
-except ImportError:
-    TRAY_AVAILABLE = False
 
 CONFIG_FILE = "monitor_config.json"
 REMINDER_RECORD_FILE = "reminded.json"
@@ -21,12 +13,11 @@ class AgeMonitorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("年龄预警监控器")
-        self.root.geometry("820x720")
-        self.root.minsize(680, 580)
+        self.root.geometry("750x650")
+        self.root.minsize(680, 600)
 
         self.monitoring = False
         self.after_id = None
-        self.tray_icon = None
         self.available_sheets = []
 
         self.config = self.load_config()
@@ -36,7 +27,16 @@ class AgeMonitorApp:
         self.header_row = self.config.get("header_row", 0)
         self.target_age = self.config.get("target_age", 80)
         self.cond_type = self.config.get("cond_type", "本月达到年龄")
-        self.days_ahead = self.config.get("days_ahead", 30)
+        self.deadline_str = self.config.get("deadline", "")
+        if self.deadline_str:
+            try:
+                self.deadline_date = datetime.strptime(self.deadline_str, "%Y-%m-%d").date()
+            except:
+                self.deadline_date = datetime.now().date() + timedelta(days=30)
+        else:
+            self.deadline_date = datetime.now().date() + timedelta(days=30)
+            self.deadline_str = self.deadline_date.strftime("%Y-%m-%d")
+
         self.hour = self.config.get("hour", 9)
         self.minute = self.config.get("minute", 0)
 
@@ -45,13 +45,8 @@ class AgeMonitorApp:
 
         self.create_widgets()
         self.load_settings_to_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        if TRAY_AVAILABLE:
-            self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
-        else:
-            self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-    # ------------------ 配置保存/加载 ------------------
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
             try:
@@ -69,7 +64,7 @@ class AgeMonitorApp:
             "header_row": self.header_row,
             "target_age": self.target_age,
             "cond_type": self.cond_type,
-            "days_ahead": self.days_ahead,
+            "deadline": self.deadline_str if self.cond_type == "截止日期前达到年龄" else "",
             "hour": self.hour,
             "minute": self.minute,
         }
@@ -106,7 +101,6 @@ class AgeMonitorApp:
         with open(REMINDER_RECORD_FILE, "w", encoding="utf-8") as f:
             json.dump(self.reminded_data, f, ensure_ascii=False, indent=2, default=str)
 
-    # ------------------ 界面构建 ------------------
     def create_widgets(self):
         self.sheet_mode_var = tk.StringVar(value=self.sheet_mode)
         self.sheet_name_var = tk.StringVar(value=self.sheet_name)
@@ -120,7 +114,7 @@ class AgeMonitorApp:
         main_frame = ttk.Frame(self.root, padding="8")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # ----- 文件选择 -----
+        # 文件选择
         file_frame = ttk.LabelFrame(main_frame, text="Excel文件", padding="5")
         file_frame.pack(fill=tk.X, pady=(0,8))
 
@@ -156,7 +150,7 @@ class AgeMonitorApp:
         btn_auto_header.pack(side=tk.LEFT, padx=5)
         ttk.Label(header_frame, text="(表头行以下为正式数据)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
-        # ----- 监控参数 -----
+        # 监控参数
         param_frame = ttk.LabelFrame(main_frame, text="监控参数", padding="5")
         param_frame.pack(fill=tk.X, pady=(0,8))
 
@@ -174,30 +168,55 @@ class AgeMonitorApp:
         rb_cond2 = ttk.Radiobutton(row1, text="下月达到年龄", variable=self.cond_var, value="下月达到年龄",
                                    command=self.on_cond_changed)
         rb_cond2.pack(side=tk.LEFT, padx=2)
-        rb_cond3 = ttk.Radiobutton(row1, text="几天内达到年龄", variable=self.cond_var, value="几天内达到年龄",
+        rb_cond3 = ttk.Radiobutton(row1, text="本年度达到年龄", variable=self.cond_var, value="本年度达到年龄",
                                    command=self.on_cond_changed)
         rb_cond3.pack(side=tk.LEFT, padx=2)
+        rb_cond4 = ttk.Radiobutton(row1, text="截止日期前达到年龄", variable=self.cond_var, value="截止日期前达到年龄",
+                                   command=self.on_cond_changed)
+        rb_cond4.pack(side=tk.LEFT, padx=2)
 
+        # 截止日期输入（年/月/日下拉框）
         row2 = ttk.Frame(param_frame)
         row2.pack(fill=tk.X, pady=2)
-        self.days_frame = ttk.Frame(row2)
-        self.days_frame.pack(side=tk.LEFT)
-        ttk.Label(self.days_frame, text="未来天数:").pack(side=tk.LEFT)
-        self.days_var = tk.IntVar(value=self.days_ahead)
-        self.days_spin = ttk.Spinbox(self.days_frame, from_=1, to=365, textvariable=self.days_var, width=6)
-        self.days_spin.pack(side=tk.LEFT, padx=5)
-        ttk.Label(self.days_frame, text="(仅当条件为'几天内')").pack(side=tk.LEFT, padx=5)
+        self.deadline_frame = ttk.Frame(row2)
+        self.deadline_frame.pack(side=tk.LEFT)
 
-        ttk.Label(row2, text="每日定时:").pack(side=tk.LEFT, padx=(15,0))
+        ttk.Label(self.deadline_frame, text="截止日期:").pack(side=tk.LEFT)
+
+        current_year = datetime.now().year
+        self.year_var = tk.IntVar(value=self.deadline_date.year)
+        self.year_spin = ttk.Spinbox(self.deadline_frame, from_=1900, to=current_year+10,
+                                     textvariable=self.year_var, width=6, command=self.on_date_changed)
+        self.year_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(self.deadline_frame, text="年").pack(side=tk.LEFT)
+
+        self.month_var = tk.IntVar(value=self.deadline_date.month)
+        self.month_spin = ttk.Spinbox(self.deadline_frame, from_=1, to=12,
+                                      textvariable=self.month_var, width=4, command=self.on_date_changed)
+        self.month_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(self.deadline_frame, text="月").pack(side=tk.LEFT)
+
+        self.day_var = tk.IntVar(value=self.deadline_date.day)
+        self.day_spin = ttk.Spinbox(self.deadline_frame, from_=1, to=31,
+                                    textvariable=self.day_var, width=4, command=self.on_date_changed)
+        self.day_spin.pack(side=tk.LEFT, padx=2)
+        ttk.Label(self.deadline_frame, text="日").pack(side=tk.LEFT)
+
+        ttk.Label(self.deadline_frame, text="(满足: 达到年龄日期 ≤ 截止日期)", foreground="gray").pack(side=tk.LEFT, padx=10)
+
+        # 每日定时
+        row3 = ttk.Frame(param_frame)
+        row3.pack(fill=tk.X, pady=2)
+        ttk.Label(row3, text="每日定时:").pack(side=tk.LEFT)
         self.hour_var = tk.IntVar(value=self.hour)
-        hour_spin = ttk.Spinbox(row2, from_=0, to=23, width=3, textvariable=self.hour_var)
+        hour_spin = ttk.Spinbox(row3, from_=0, to=23, width=3, textvariable=self.hour_var)
         hour_spin.pack(side=tk.LEFT)
-        ttk.Label(row2, text=":").pack(side=tk.LEFT)
+        ttk.Label(row3, text=":").pack(side=tk.LEFT)
         self.minute_var = tk.IntVar(value=self.minute)
-        minute_spin = ttk.Spinbox(row2, from_=0, to=59, width=3, textvariable=self.minute_var)
+        minute_spin = ttk.Spinbox(row3, from_=0, to=59, width=3, textvariable=self.minute_var)
         minute_spin.pack(side=tk.LEFT)
 
-        # ----- 按钮 -----
+        # 按钮区域
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=tk.X, pady=5)
         self.btn_start = ttk.Button(btn_frame, text="开始监控", command=self.start_monitor)
@@ -222,19 +241,51 @@ class AgeMonitorApp:
         self.log_text = scrolledtext.ScrolledText(log_frame, height=12, font=('Consolas', 9), wrap=tk.WORD)
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
-        self.update_days_spin_state()
+        self.update_deadline_state()
         self.on_sheet_mode_changed()
         self.refresh_sheet_list()
 
-    # ------------------ 辅助方法 ------------------
-    def update_days_spin_state(self):
-        if self.cond_var.get() == "几天内达到年龄":
-            self.days_spin.config(state="normal")
+    def update_day_range(self):
+        year = self.year_var.get()
+        month = self.month_var.get()
+        if month in (1, 3, 5, 7, 8, 10, 12):
+            max_day = 31
+        elif month in (4, 6, 9, 11):
+            max_day = 30
         else:
-            self.days_spin.config(state="disabled")
+            if (year % 400 == 0) or (year % 4 == 0 and year % 100 != 0):
+                max_day = 29
+            else:
+                max_day = 28
+        self.day_spin.config(to=max_day)
+        if self.day_var.get() > max_day:
+            self.day_var.set(max_day)
+
+    def on_date_changed(self, event=None):
+        self.update_day_range()
+        year = self.year_var.get()
+        month = self.month_var.get()
+        day = self.day_var.get()
+        try:
+            new_date = datetime(year, month, day).date()
+            self.deadline_date = new_date
+            self.deadline_str = self.deadline_date.strftime("%Y-%m-%d")
+            # 仅记录日志，不弹窗（避免 TclError）
+            self.log(f"截止日期已更改为: {self.deadline_str}")
+        except ValueError:
+            pass
+
+    def update_deadline_state(self):
+        if self.cond_var.get() == "截止日期前达到年龄":
+            self.deadline_frame.pack(side=tk.LEFT)
+            for child in self.deadline_frame.winfo_children():
+                if isinstance(child, ttk.Spinbox):
+                    child.config(state="normal")
+        else:
+            self.deadline_frame.pack_forget()
 
     def on_cond_changed(self):
-        self.update_days_spin_state()
+        self.update_deadline_state()
         self.log(f"监测条件已改为: {self.cond_var.get()}")
 
     def on_sheet_mode_changed(self):
@@ -254,10 +305,13 @@ class AgeMonitorApp:
         self.header_row_var.set(self.header_row)
         self.age_var.set(self.target_age)
         self.cond_var.set(self.cond_type)
-        self.days_var.set(self.days_ahead)
+        self.year_var.set(self.deadline_date.year)
+        self.month_var.set(self.deadline_date.month)
+        self.day_var.set(self.deadline_date.day)
+        self.update_day_range()
         self.hour_var.set(self.hour)
         self.minute_var.set(self.minute)
-        self.update_days_spin_state()
+        self.update_deadline_state()
         self.on_sheet_mode_changed()
         self.refresh_sheet_list()
 
@@ -267,7 +321,6 @@ class AgeMonitorApp:
         self.log_text.see(tk.END)
         self.root.update_idletasks()
 
-    # ------------------ 文件与表头处理 ------------------
     def select_excel_file(self):
         filetypes = [("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
         filename = filedialog.askopenfilename(title="选择人员数据Excel文件", filetypes=filetypes)
@@ -362,7 +415,6 @@ class AgeMonitorApp:
     def get_current_settings(self):
         self.target_age = self.age_var.get()
         self.cond_type = self.cond_var.get()
-        self.days_ahead = self.days_var.get()
         self.hour = self.hour_var.get()
         self.minute = self.minute_var.get()
         self.sheet_mode = self.sheet_mode_var.get()
@@ -373,7 +425,6 @@ class AgeMonitorApp:
         self.header_row = self.header_row_var.get()
         self.save_config()
 
-    # ------------------ 核心逻辑 ------------------
     def convert_birth_date(self, val):
         if pd.isna(val):
             return pd.NaT
@@ -411,10 +462,10 @@ class AgeMonitorApp:
             next_month_start = today.replace(day=1) + relativedelta(months=1)
             next_month_end = next_month_start + relativedelta(months=1, days=-1)
             return next_month_start <= target_date <= next_month_end
-        elif cond == "几天内达到年龄":
-            days = self.days_ahead
-            delta = (target_date - today).days
-            return 0 <= delta <= days
+        elif cond == "本年度达到年龄":
+            return target_date.year == today.year
+        elif cond == "截止日期前达到年龄":
+            return target_date <= self.deadline_date
         return False
 
     def check_new_targets(self):
@@ -439,6 +490,7 @@ class AgeMonitorApp:
                 return pd.DataFrame()
 
         all_results = []
+        today = datetime.now().date()
         for sheet in sheets_to_read:
             df = self.read_data_with_header(self.excel_path, sheet)
             if df is None or df.empty:
@@ -471,7 +523,6 @@ class AgeMonitorApp:
             df['birth_date'] = df[birth_col].dt.date
 
             target_age = self.target_age
-            today = datetime.now().date()
             for idx, row in df.iterrows():
                 birth = row['birth_date']
                 target_date = self.get_target_date(birth, target_age)
@@ -484,8 +535,21 @@ class AgeMonitorApp:
                     age_now = self.compute_age(birth)
                     unique_id = f"{sheet}_{name_str}_{birth}_{target_age}_{self.cond_type}"
                     if unique_id not in self.reminded_set:
-                        if self.cond_type == "几天内达到年龄":
-                            cond_display = f"{self.days_ahead}天内达到"
+                        # 重要：当截止日期 >= 今天时，只提醒未来（target_date > today）的人员
+                        if self.cond_type == "截止日期前达到年龄" and self.deadline_date >= today:
+                            if target_date <= today:
+                                continue  # 跳过已经达龄的，只提醒未来的
+                            remind_type = "即将达标"
+                        else:
+                            # 其他条件或截止日期<今天时，不额外过滤
+                            remind_type = "已达标" if target_date <= today else "即将达标"
+
+                        # 检测条件显示文字
+                        if self.cond_type == "截止日期前达到年龄":
+                            if self.deadline_date >= today:
+                                cond_display = f"截止日期({self.deadline_str})前达到 (未来提醒)"
+                            else:
+                                cond_display = f"截止日期({self.deadline_str})前达到"
                         else:
                             cond_display = self.cond_type
                         record = row.to_dict()
@@ -496,15 +560,17 @@ class AgeMonitorApp:
                         record["年龄"] = age_now
                         record["达到目标年龄日期"] = target_date
                         record["检测条件"] = cond_display
+                        record["提醒类型"] = remind_type
                         record["unique_id"] = unique_id
                         all_results.append(record)
 
         if all_results:
+            future_count = sum(1 for r in all_results if r.get("提醒类型") == "即将达标")
+            self.log(f"发现 {len(all_results)} 位符合条件人员，其中即将达标: {future_count} 人")
             return pd.DataFrame(all_results)
         else:
             return pd.DataFrame()
 
-    # ------------------ 实时提醒窗口（固定列增加“工作表”） ------------------
     def blink_window(self, win, count=12, interval=400):
         if count <= 0:
             win.title("年龄预警提醒")
@@ -524,7 +590,8 @@ class AgeMonitorApp:
         alert_win.grab_set()
         self.blink_window(alert_win)
 
-        fixed_cols = ["工作表", "姓名", "出生日期", "目标年龄", "达到目标年龄日期"]
+        # 固定列：工作表、姓名、出生日期、目标年龄、达到目标年龄日期、提醒类型
+        fixed_cols = ["工作表", "姓名", "出生日期", "目标年龄", "达到目标年龄日期", "提醒类型"]
         if "目标年龄" not in new_df.columns:
             new_df = new_df.copy()
             new_df["目标年龄"] = self.target_age
@@ -546,7 +613,6 @@ class AgeMonitorApp:
         extra2_combo = ttk.Combobox(control_frame, textvariable=extra2_var, values=available_extra, state="readonly", width=15)
         extra2_combo.pack(side=tk.LEFT, padx=5)
 
-        # 人数标签
         count_label = ttk.Label(control_frame, text=f"共 {len(new_df)} 人", foreground="blue")
         count_label.pack(side=tk.LEFT, padx=(10,0))
 
@@ -621,13 +687,14 @@ class AgeMonitorApp:
 
             date_str = datetime.now().strftime("%Y-%m-%d")
             cond = self.cond_var.get()
-            if cond == "几天内达到年龄":
-                days = self.days_var.get()
-                cond_display = f"{days}天内达到"
+            if cond == "截止日期前达到年龄":
+                if self.deadline_date >= datetime.now().date():
+                    cond_display = f"截止日期({self.deadline_str})前 (未来提醒)"
+                else:
+                    cond_display = f"截止日期({self.deadline_str})前"
             else:
                 cond_display = cond
             filename = f"{date_str}_{cond_display}.xlsx"
-
             filepath = filedialog.asksaveasfilename(
                 parent=alert_win,
                 defaultextension=".xlsx",
@@ -672,7 +739,6 @@ class AgeMonitorApp:
 
         rebuild_table()
 
-    # ------------------ 历史提醒窗口（固定列增加“工作表”） ------------------
     def show_reminded_records(self):
         if not self.reminded_data:
             messagebox.showinfo("无记录", "暂无已提醒的记录。")
@@ -715,7 +781,6 @@ class AgeMonitorApp:
         extra2_combo = ttk.Combobox(control_frame, textvariable=extra2_var, values=available_extra, state="readonly", width=15)
         extra2_combo.pack(side=tk.LEFT, padx=5)
 
-        # 人数标签
         count_label = ttk.Label(control_frame, text=f"共 {len(df)} 人", foreground="blue")
         count_label.pack(side=tk.LEFT, padx=(10,0))
 
@@ -786,7 +851,6 @@ class AgeMonitorApp:
         extra2_combo.bind("<<ComboboxSelected>>", on_extra_changed)
         rebuild_table()
 
-    # ------------------ 监控流程 ------------------
     def perform_check(self):
         self.log("开始检查...")
         try:
@@ -807,7 +871,6 @@ class AgeMonitorApp:
         self.log("手动触发检查")
         self.perform_check()
 
-    # ------------------ 定时调度 ------------------
     def schedule_daily(self):
         if not self.monitoring:
             return
@@ -826,7 +889,6 @@ class AgeMonitorApp:
         self.perform_check()
         self.schedule_daily()
 
-    # ------------------ 监控控制 ------------------
     def start_monitor(self):
         if self.monitoring:
             return
@@ -873,39 +935,6 @@ class AgeMonitorApp:
             self.save_reminded_data()
             self.log("已清空提醒记录。")
             messagebox.showinfo("已清除", "提醒记录已清空。")
-
-    # ------------------ 系统托盘 ------------------
-    def hide_to_tray(self):
-        if TRAY_AVAILABLE:
-            self.root.withdraw()
-            self.create_tray_icon()
-        else:
-            self.on_closing()
-
-    def create_tray_icon(self):
-        if self.tray_icon:
-            return
-        image = Image.new('RGB', (64, 64), color='white')
-        draw = ImageDraw.Draw(image)
-        draw.rectangle((16, 16, 48, 48), fill='blue')
-        menu = pystray.Menu(
-            pystray.MenuItem("显示窗口", self.show_window),
-            pystray.MenuItem("退出程序", self.quit_app)
-        )
-        self.tray_icon = pystray.Icon("age_monitor", image, "年龄预警监控器", menu)
-        threading.Thread(target=self.tray_icon.run, daemon=True).start()
-
-    def show_window(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-            self.tray_icon = None
-        self.root.deiconify()
-        self.root.lift()
-
-    def quit_app(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.on_closing()
 
     def on_closing(self):
         self.stop_monitor()
