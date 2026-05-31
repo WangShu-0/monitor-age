@@ -15,7 +15,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           architecture: 'x64'
 
       - name: Install dependencies
@@ -25,7 +25,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --name="年龄预警监控器" --icon=icon.ico `
+          pyinstaller --onefile --windowed --name="monitor_age" --icon=icon.ico `
             --hidden-import pandas `
             --hidden-import openpyxl `
             --hidden-import dateutil `
@@ -36,5 +36,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 年龄预警监控器
-          path: dist/年龄预警监控器.exe
+          name: monitor_age
+          path: dist/monitor_age.exe
